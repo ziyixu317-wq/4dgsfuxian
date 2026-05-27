@@ -6,7 +6,6 @@ from scene.cameras import MiniCam
 import os
 from os import makedirs
 from gaussian_renderer import render
-import torchvision
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args, ModelHiddenParams
@@ -139,6 +138,7 @@ if __name__ == "__main__":
     cam_type = scene.dataset_type
 
     n_pts = load_custom_ply(args.custom_ply, gaussians, canon_attrs)
+    del canon_attrs
     print(f"Loaded custom PLY: {n_pts} Gaussians")
 
     cameras_by_time = defaultdict(list)
@@ -169,11 +169,10 @@ if __name__ == "__main__":
             normals = np.zeros_like(pts_np)
             f_dc = shs_final[:, 0:1, :].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
             f_rest = shs_final[:, 1:, :].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-            opa_np = gaussians.inverse_opacity_activation(
-                gaussians.opacity_activation(opa_final)).detach().cpu().numpy()
-            sca_np = gaussians.scaling_inverse_activation(
-                gaussians.scaling_activation(scales_final)).detach().cpu().numpy()
+            opa_np = opa_final.detach().cpu().numpy()
+            sca_np = scales_final.detach().cpu().numpy()
             rot_np = gaussians.rotation_activation(rots_final).detach().cpu().numpy()
+            index_np = np.arange(pts_np.shape[0], dtype=np.float32).reshape(-1, 1)
 
             attribs = ['x', 'y', 'z', 'nx', 'ny', 'nz']
             for i in range(f_dc.shape[1]):
@@ -185,10 +184,11 @@ if __name__ == "__main__":
                 attribs.append(f'scale_{i}')
             for i in range(rot_np.shape[1]):
                 attribs.append(f'rot_{i}')
+            attribs.append('original_index')
 
             dtype_full = [(a, 'f4') for a in attribs]
             elements = np.empty(pts_np.shape[0], dtype=dtype_full)
-            all_attrs = np.concatenate([pts_np, normals, f_dc, f_rest, opa_np, sca_np, rot_np], axis=1)
+            all_attrs = np.concatenate([pts_np, normals, f_dc, f_rest, opa_np, sca_np, rot_np, index_np], axis=1)
             elements[:] = list(map(tuple, all_attrs))
             PlyData([PlyElement.describe(elements, 'vertex')]).write(ply_path)
 
