@@ -1,6 +1,7 @@
 import imageio
 import numpy as np
 import torch
+import copy
 from scene import Scene
 import os
 from os import makedirs
@@ -66,6 +67,7 @@ def load_custom_ply(ply_path, gaussians):
     gaussians._rotation = torch.tensor(rots, dtype=torch.float, device="cuda")
     gaussians.max_radii2D = torch.zeros((n), device="cuda")
     gaussians._deformation_table = torch.gt(torch.ones((n), device="cuda"), 0)
+    gaussians.active_sh_degree = gaussians.max_sh_degree
 
     return n
 
@@ -123,39 +125,17 @@ if __name__ == "__main__":
     fixed_cam = cameras_by_time[sorted_times[0]][args.camera_idx]
     print(f"Fixed camera for video: index {args.camera_idx}")
 
-    canonical_xyz = gaussians._xyz.clone()
-    canonical_scaling = gaussians._scaling.clone()
-    canonical_rotation = gaussians._rotation.clone()
-    canonical_opacity = gaussians._opacity.clone()
-    canonical_features_dc = gaussians._features_dc.clone()
-    canonical_features_rest = gaussians._features_rest.clone()
-
     video_frames = []
 
     for idx, t in enumerate(tqdm(sorted_times, desc="Deforming through time")):
-        gaussians._xyz = canonical_xyz
-        gaussians._scaling = canonical_scaling
-        gaussians._rotation = canonical_rotation
-        gaussians._opacity = canonical_opacity
-        gaussians._features_dc = canonical_features_dc
-        gaussians._features_rest = canonical_features_rest
-
-        means3D = gaussians.get_xyz
-        time_tensor = torch.tensor(t).to(means3D.device).repeat(means3D.shape[0], 1)
-
-        with torch.no_grad():
-            pts, scales_final, rots_final, opa_final, shs_final = gaussians._deformation(
-                means3D, gaussians._scaling, gaussians._rotation,
-                gaussians._opacity, gaussians.get_features, time_tensor)
-
-        gaussians._xyz = pts
-        gaussians._scaling = scales_final
-        gaussians._rotation = rots_final
-        gaussians._opacity = opa_final
-        gaussians._features_dc = shs_final[:, 0:1, :].contiguous()
-        gaussians._features_rest = shs_final[:, 1:, :].contiguous()
-
         if args.save_ply:
+            means3D = gaussians.get_xyz
+            time_tensor = torch.tensor(t).to(means3D.device).repeat(means3D.shape[0], 1)
+            with torch.no_grad():
+                pts, scales_final, rots_final, opa_final, shs_final = gaussians._deformation(
+                    means3D, gaussians._scaling, gaussians._rotation,
+                    gaussians._opacity, gaussians.get_features, time_tensor)
+
             ply_path = os.path.join(output_dir, f"deformed_time_{idx:03d}.ply")
             pts_np = pts.detach().cpu().numpy()
             normals = np.zeros_like(pts_np)
@@ -184,8 +164,10 @@ if __name__ == "__main__":
             elements[:] = list(map(tuple, all_attrs))
             PlyData([PlyElement.describe(elements, 'vertex')]).write(ply_path)
 
-        rendering = render(fixed_cam, gaussians, pipe, background,
-                           cam_type=cam_type, stage="coarse")["render"]
+        cam = copy.deepcopy(fixed_cam)
+        cam.time = t
+        rendering = render(cam, gaussians, pipe, background,
+                           cam_type=cam_type, stage="fine")["render"]
         video_frames.append(to8b(rendering).transpose(1, 2, 0))
 
     video_path = os.path.join(output_dir, "custom_deform_video.mp4")
