@@ -14,7 +14,7 @@ from tqdm import tqdm
 from plyfile import PlyData
 from collections import defaultdict
 
-to8b = lambda x: (255 * np.clip(x.cpu().numpy(), 0, 1)).astype(np.uint8)
+to8b = lambda x: (255 * np.clip(x.detach().cpu().numpy(), 0, 1)).astype(np.uint8)
 
 
 def load_ply_to_gaussians(ply_path, gaussians):
