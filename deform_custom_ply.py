@@ -113,6 +113,23 @@ if __name__ == "__main__":
     n_pts = load_custom_ply(args.custom_ply, gaussians)
     print(f"Loaded custom PLY: {n_pts} Gaussians")
 
+    xyz0 = gaussians._xyz.clone()
+    sca0 = gaussians._scaling.clone()
+    rot0 = gaussians._rotation.clone()
+    opa0 = gaussians._opacity.clone()
+    fea0 = gaussians.get_features.clone()
+    time_0 = torch.zeros(n_pts, 1, device="cuda")
+    with torch.no_grad():
+        pts_d, sca_d, rot_d, opa_d, shs_d = gaussians._deformation(
+            xyz0, sca0, rot0, opa0, fea0, time_0)
+    gaussians._xyz = 2 * xyz0 - pts_d
+    gaussians._scaling = 2 * sca0 - sca_d
+    gaussians._rotation = 2 * rot0 - rot_d
+    gaussians._opacity = 2 * opa0 - opa_d
+    gaussians._features_dc = (2 * fea0 - shs_d)[:, 0:1, :].contiguous()
+    gaussians._features_rest = (2 * fea0 - shs_d)[:, 1:, :].contiguous()
+    print("Inverse-corrected canonical state from time-0 PLY")
+
     cameras_by_time = defaultdict(list)
     for cam in scene.getTrainCameras():
         cameras_by_time[float(cam.time)].append(cam)
