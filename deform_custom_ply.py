@@ -1,8 +1,8 @@
 import imageio
 import numpy as np
 import torch
-import copy
 from scene import Scene
+from scene.cameras import MiniCam
 import os
 from os import makedirs
 from gaussian_renderer import render
@@ -181,8 +181,13 @@ if __name__ == "__main__":
             elements[:] = list(map(tuple, all_attrs))
             PlyData([PlyElement.describe(elements, 'vertex')]).write(ply_path)
 
-        cam = copy.deepcopy(fixed_cam)
-        cam.time = t
+        cam = MiniCam(
+            width=fixed_cam.image_width, height=fixed_cam.image_height,
+            fovy=fixed_cam.FoVy, fovx=fixed_cam.FoVx,
+            znear=fixed_cam.znear, zfar=fixed_cam.zfar,
+            world_view_transform=fixed_cam.world_view_transform,
+            full_proj_transform=fixed_cam.full_proj_transform,
+            time=t)
         rendering = render(cam, gaussians, pipe, background,
                            cam_type=cam_type, stage="fine")["render"]
         video_frames.append(to8b(rendering).transpose(1, 2, 0))
