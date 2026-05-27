@@ -116,16 +116,24 @@ if __name__ == "__main__":
     os.makedirs(output_path, exist_ok=True)
     
     print("Computing Gaussians with Indices...")
-    for index, viewpoint in enumerate(scene.getTestCameras()):
-        
+    seen_times = set()
+    unique_time_cameras = []
+    for viewpoint in scene.getTrainCameras():
+        t = float(viewpoint.time)
+        if t not in seen_times:
+            seen_times.add(t)
+            unique_time_cameras.append(viewpoint)
+    unique_time_cameras.sort(key=lambda v: float(v.time))
+    print(f"Exporting {len(unique_time_cameras)} unique time steps (train set)")
+
+    for index, viewpoint in enumerate(unique_time_cameras):
         points, scales_final, rotations_final, opacity_final, shs_final = get_state_at_time(gaussians, viewpoint)
         feature_dc_shape = gaussians._features_dc.shape[1]
         feature_rest_shape = gaussians._features_rest.shape[1]
-        
-        # 使用修改后的函数生成 PLY
+
         gs_ply = init_3DGaussians_ply(points, scales_final, rotations_final, opacity_final, shs_final, [feature_dc_shape, feature_rest_shape])
-        
+
         save_path = os.path.join(output_path, "time_{0:05d}.ply".format(index))
         gs_ply.write(save_path)
-        
-    print(f"Done. Indexed PLY files saved to {output_path}")
+
+    print(f"Done. {len(unique_time_cameras)} PLY files saved to {output_path}")
