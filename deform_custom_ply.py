@@ -123,9 +123,23 @@ if __name__ == "__main__":
     fixed_cam = cameras_by_time[sorted_times[0]][args.camera_idx]
     print(f"Fixed camera for video: index {args.camera_idx}")
 
+    canonical_xyz = gaussians._xyz.clone()
+    canonical_scaling = gaussians._scaling.clone()
+    canonical_rotation = gaussians._rotation.clone()
+    canonical_opacity = gaussians._opacity.clone()
+    canonical_features_dc = gaussians._features_dc.clone()
+    canonical_features_rest = gaussians._features_rest.clone()
+
     video_frames = []
 
     for idx, t in enumerate(tqdm(sorted_times, desc="Deforming through time")):
+        gaussians._xyz = canonical_xyz
+        gaussians._scaling = canonical_scaling
+        gaussians._rotation = canonical_rotation
+        gaussians._opacity = canonical_opacity
+        gaussians._features_dc = canonical_features_dc
+        gaussians._features_rest = canonical_features_rest
+
         means3D = gaussians.get_xyz
         time_tensor = torch.tensor(t).to(means3D.device).repeat(means3D.shape[0], 1)
 
@@ -134,31 +148,30 @@ if __name__ == "__main__":
                 means3D, gaussians._scaling, gaussians._rotation,
                 gaussians._opacity, gaussians.get_features, time_tensor)
 
-        scales_final = gaussians.scaling_activation(scales_final)
-        rots_final = gaussians.rotation_activation(rots_final)
-        opa_final = gaussians.opacity_activation(opa_final)
+        gaussians._xyz = pts
+        gaussians._scaling = scales_final
+        gaussians._rotation = rots_final
+        gaussians._opacity = opa_final
+        gaussians._features_dc = shs_final[:, 0:1, :].contiguous()
+        gaussians._features_rest = shs_final[:, 1:, :].contiguous()
 
         if args.save_ply:
-            from scene.gaussian_model import GaussianModel as GM
-            import copy
-            tmp_g = copy.deepcopy(gaussians)
-            # Set deformed attrs temporarily
-            # Use a simple PLY save approach
             ply_path = os.path.join(output_dir, f"deformed_time_{idx:03d}.ply")
-            # Build PLY manually
             pts_np = pts.detach().cpu().numpy()
             normals = np.zeros_like(pts_np)
             f_dc = shs_final[:, 0:1, :].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
             f_rest = shs_final[:, 1:, :].detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-            opa_np = gaussians.inverse_opacity_activation(opa_final).detach().cpu().numpy()
-            sca_np = gaussians.scaling_inverse_activation(scales_final).detach().cpu().numpy()
-            rot_np = rots_final.detach().cpu().numpy()
+            opa_np = gaussians.inverse_opacity_activation(
+                gaussians.opacity_activation(opa_final)).detach().cpu().numpy()
+            sca_np = gaussians.scaling_inverse_activation(
+                gaussians.scaling_activation(scales_final)).detach().cpu().numpy()
+            rot_np = gaussians.rotation_activation(rots_final).detach().cpu().numpy()
 
             attribs = ['x', 'y', 'z', 'nx', 'ny', 'nz']
             for i in range(f_dc.shape[1]):
                 attribs.append(f'f_dc_{i}')
             for i in range(f_rest.shape[1]):
-                attribs.append(f'rest_{i}')
+                attribs.append(f'f_rest_{i}')
             attribs.append('opacity')
             for i in range(sca_np.shape[1]):
                 attribs.append(f'scale_{i}')
