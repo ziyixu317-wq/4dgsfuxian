@@ -18,57 +18,76 @@ from collections import defaultdict
 to8b = lambda x: (255 * np.clip(x.detach().cpu().numpy(), 0, 1)).astype(np.uint8)
 
 
-def load_custom_ply(ply_path, gaussians):
-    """Load user-edited PLY into GaussianModel, supporting subset of points."""
+def load_custom_ply(ply_path, gaussians, canon_attrs=None):
+    """Load user-edited PLY into GaussianModel.
+
+    If canon_attrs is provided and the PLY has an 'original_index' column,
+    use it to look up the exact canonical attributes from the checkpoint.
+    Otherwise load PLY values directly (fallback for PLYs without index).
+    """
     plydata = PlyData.read(ply_path)
     vertex = plydata.elements[0]
 
-    xyz = np.stack([np.asarray(vertex["x"]),
-                    np.asarray(vertex["y"]),
-                    np.asarray(vertex["z"])], axis=1)
+    has_index = any(p.name == "original_index" for p in vertex.properties)
 
-    opacities = np.asarray(vertex["opacity"])[..., np.newaxis]
+    if has_index and canon_attrs is not None:
+        indices = np.asarray(vertex["original_index"]).astype(np.int64)
+        c_xyz, c_sca, c_rot, c_opa, c_fdc, c_frs = canon_attrs
+        gaussians._xyz = c_xyz[indices].clone()
+        gaussians._scaling = c_sca[indices].clone()
+        gaussians._rotation = c_rot[indices].clone()
+        gaussians._opacity = c_opa[indices].clone()
+        gaussians._features_dc = c_fdc[indices].clone()
+        gaussians._features_rest = c_frs[indices].clone()
+        n = len(indices)
+        print(f"Matched {n} points to canonical by original_index")
+    else:
+        xyz = np.stack([np.asarray(vertex["x"]),
+                        np.asarray(vertex["y"]),
+                        np.asarray(vertex["z"])], axis=1)
+        opacities = np.asarray(vertex["opacity"])[..., np.newaxis]
 
-    features_dc = np.zeros((xyz.shape[0], 3, 1))
-    features_dc[:, 0, 0] = np.asarray(vertex["f_dc_0"])
-    features_dc[:, 1, 0] = np.asarray(vertex["f_dc_1"])
-    features_dc[:, 2, 0] = np.asarray(vertex["f_dc_2"])
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc[:, 0, 0] = np.asarray(vertex["f_dc_0"])
+        features_dc[:, 1, 0] = np.asarray(vertex["f_dc_1"])
+        features_dc[:, 2, 0] = np.asarray(vertex["f_dc_2"])
 
-    extra_f_names = sorted(
-        [p.name for p in vertex.properties if p.name.startswith("f_rest_")],
-        key=lambda x: int(x.split('_')[-1]))
-    features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
-    for idx, attr_name in enumerate(extra_f_names):
-        features_extra[:, idx] = np.asarray(vertex[attr_name])
-    features_extra = features_extra.reshape((features_extra.shape[0], 3, -1))
+        extra_f_names = sorted(
+            [p.name for p in vertex.properties if p.name.startswith("f_rest_")],
+            key=lambda x: int(x.split('_')[-1]))
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+        for idx, attr_name in enumerate(extra_f_names):
+            features_extra[:, idx] = np.asarray(vertex[attr_name])
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, -1))
 
-    scale_names = sorted(
-        [p.name for p in vertex.properties if p.name.startswith("scale_")],
-        key=lambda x: int(x.split('_')[-1]))
-    scales = np.zeros((xyz.shape[0], len(scale_names)))
-    for idx, attr_name in enumerate(scale_names):
-        scales[:, idx] = np.asarray(vertex[attr_name])
+        scale_names = sorted(
+            [p.name for p in vertex.properties if p.name.startswith("scale_")],
+            key=lambda x: int(x.split('_')[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(vertex[attr_name])
 
-    rot_names = sorted(
-        [p.name for p in vertex.properties if p.name.startswith("rot")],
-        key=lambda x: int(x.split('_')[-1]))
-    rots = np.zeros((xyz.shape[0], len(rot_names)))
-    for idx, attr_name in enumerate(rot_names):
-        rots[:, idx] = np.asarray(vertex[attr_name])
+        rot_names = sorted(
+            [p.name for p in vertex.properties if p.name.startswith("rot")],
+            key=lambda x: int(x.split('_')[-1]))
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
+        for idx, attr_name in enumerate(rot_names):
+            rots[:, idx] = np.asarray(vertex[attr_name])
 
-    n = xyz.shape[0]
-    gaussians._xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
-    gaussians._features_dc = torch.tensor(
-        features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
-    gaussians._features_rest = torch.tensor(
-        features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
-    gaussians._opacity = torch.tensor(opacities, dtype=torch.float, device="cuda")
-    gaussians._scaling = torch.tensor(scales, dtype=torch.float, device="cuda")
-    gaussians._rotation = torch.tensor(rots, dtype=torch.float, device="cuda")
+        n = xyz.shape[0]
+        gaussians._xyz = torch.tensor(xyz, dtype=torch.float, device="cuda")
+        gaussians._features_dc = torch.tensor(
+            features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
+        gaussians._features_rest = torch.tensor(
+            features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous()
+        gaussians._opacity = torch.tensor(opacities, dtype=torch.float, device="cuda")
+        gaussians._scaling = torch.tensor(scales, dtype=torch.float, device="cuda")
+        gaussians._rotation = torch.tensor(rots, dtype=torch.float, device="cuda")
+        print(f"Loaded {n} points from PLY values (no original_index)")
+
     gaussians.max_radii2D = torch.zeros((n), device="cuda")
     gaussians._deformation_table = torch.gt(torch.ones((n), device="cuda"), 0)
     gaussians.active_sh_degree = gaussians.max_sh_degree
-
     return n
 
 
@@ -106,29 +125,21 @@ if __name__ == "__main__":
     gaussians = GaussianModel(dataset.sh_degree, hyper)
     scene = Scene(dataset, gaussians, load_iteration=args.iteration, shuffle=False)
 
+    canon_attrs = (
+        gaussians._xyz.clone(),
+        gaussians._scaling.clone(),
+        gaussians._rotation.clone(),
+        gaussians._opacity.clone(),
+        gaussians._features_dc.clone(),
+        gaussians._features_rest.clone(),
+    )
+
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     cam_type = scene.dataset_type
 
-    n_pts = load_custom_ply(args.custom_ply, gaussians)
+    n_pts = load_custom_ply(args.custom_ply, gaussians, canon_attrs)
     print(f"Loaded custom PLY: {n_pts} Gaussians")
-
-    xyz0 = gaussians._xyz.clone()
-    sca0 = gaussians._scaling.clone()
-    rot0 = gaussians._rotation.clone()
-    opa0 = gaussians._opacity.clone()
-    fea0 = gaussians.get_features.clone()
-    time_0 = torch.zeros(n_pts, 1, device="cuda")
-    with torch.no_grad():
-        pts_d, sca_d, rot_d, opa_d, shs_d = gaussians._deformation(
-            xyz0, sca0, rot0, opa0, fea0, time_0)
-    gaussians._xyz = 2 * xyz0 - pts_d
-    gaussians._scaling = 2 * sca0 - sca_d
-    gaussians._rotation = 2 * rot0 - rot_d
-    gaussians._opacity = 2 * opa0 - opa_d
-    gaussians._features_dc = (2 * fea0 - shs_d)[:, 0:1, :].contiguous()
-    gaussians._features_rest = (2 * fea0 - shs_d)[:, 1:, :].contiguous()
-    print("Inverse-corrected canonical state from time-0 PLY")
 
     cameras_by_time = defaultdict(list)
     for cam in scene.getTrainCameras():
