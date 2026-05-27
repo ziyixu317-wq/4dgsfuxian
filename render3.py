@@ -1,3 +1,4 @@
+import imageio
 import numpy as np
 import torch
 from scene import Scene
@@ -12,6 +13,8 @@ from gaussian_renderer import GaussianModel
 from tqdm import tqdm
 from plyfile import PlyData
 from collections import defaultdict
+
+to8b = lambda x: (255 * np.clip(x.cpu().numpy(), 0, 1)).astype(np.uint8)
 
 
 def load_ply_to_gaussians(ply_path, gaussians):
@@ -146,5 +149,27 @@ if __name__ == "__main__":
                                cam_type=cam_type, stage="coarse")["render"]
             torchvision.utils.save_image(
                 rendering, os.path.join(renders_path, f"cam_{cam_idx:03d}.png"))
+
+    print("Generating fixed-viewpoint temporal video...")
+    fixed_cam = cameras_by_time[sorted_times[0]][0]
+    video_frames = []
+    video_dir = os.path.join(output_base, "video")
+    makedirs(video_dir, exist_ok=True)
+
+    for idx in range(time_start, time_end):
+        ply_file = ply_files[idx]
+        ply_path = os.path.join(ply_dir, ply_file)
+        load_ply_to_gaussians(ply_path, gaussians)
+
+        rendering = render(fixed_cam, gaussians, pipe, background,
+                           cam_type=cam_type, stage="coarse")["render"]
+        frame = to8b(rendering).transpose(1, 2, 0)
+        video_frames.append(frame)
+        torchvision.utils.save_image(
+            rendering, os.path.join(video_dir, f"frame_{idx:03d}.png"))
+
+    video_path = os.path.join(output_base, "temporal_evolution.mp4")
+    imageio.mimwrite(video_path, video_frames, fps=10)
+    print(f"Video saved to {video_path} ({len(video_frames)} frames)")
 
     print(f"Done. Renders saved to {output_base}")
